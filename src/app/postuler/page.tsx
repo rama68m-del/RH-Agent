@@ -1,9 +1,9 @@
-import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
 import { IntakeForm } from "@/components/IntakeForm";
 
 export const dynamic = "force-dynamic";
 
-// M1 — Page publique de dépôt de candidature.
+// M1 — Page publique de dépôt de candidature (client anonyme + RLS).
 // L'agence est passée en query (?agence=<uuid>) ; à défaut, la première
 // agence du système (mode pilote mono-cabinet).
 export default async function PostulerPage({
@@ -12,9 +12,9 @@ export default async function PostulerPage({
   searchParams: Promise<{ agence?: string }>;
 }) {
   const { agence } = await searchParams;
-  const admin = createAdminClient();
+  const supabase = await createClient();
 
-  let agencyQuery = admin.from("agencies").select("id, name, branding");
+  let agencyQuery = supabase.from("agencies").select("id, name, branding");
   if (agence) {
     agencyQuery = agencyQuery.eq("id", agence);
   }

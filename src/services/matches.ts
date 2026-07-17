@@ -23,7 +23,7 @@ export async function runMatchingForMandate(
     .from("candidates")
     .select("*")
     .in("status", ["nouveau", "a_revoir", "valide"])
-    .limit(60);
+    .limit(40);
   if (!candidates || candidates.length === 0) {
     throw new Error(
       "Le vivier est vide : ajoutez des candidats avant de lancer le matching."
@@ -61,6 +61,7 @@ export async function runMatchingForMandate(
 
   for (const r of result.resultats) {
     await logAudit(
+      supabase,
       r.candidate_id,
       actorEmail,
       `matching IA pour le mandat "${(mandate as Mandate).title}" (score ${r.score})`

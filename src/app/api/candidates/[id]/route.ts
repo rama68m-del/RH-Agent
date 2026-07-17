@@ -68,6 +68,11 @@ export async function PATCH(
     );
   }
 
-  await logAudit(id, session.email, "mise à jour du profil candidat (revue humaine)");
+  await logAudit(
+    supabase,
+    id,
+    session.email,
+    "mise à jour du profil candidat (revue humaine)"
+  );
   return NextResponse.json({ ok: true });
 }

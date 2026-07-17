@@ -1,7 +1,6 @@
 import "server-only";
 import React from "react";
 import { renderToBuffer } from "@react-pdf/renderer";
-import { createAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/services/audit";
 import {
   ShortlistDocument,
@@ -86,9 +85,9 @@ export async function generateShortlist({
     throw new Error("Enregistrement de la shortlist impossible.");
   }
 
-  const admin = createAdminClient();
+  // Dépôt via la session recruteur (politique RLS Storage sur l'agence)
   const path = `${agency.id}/${shortlist.id}.pdf`;
-  const { error: uploadError } = await admin.storage
+  const { error: uploadError } = await supabase.storage
     .from("shortlists")
     .upload(path, pdfBuffer, { contentType: "application/pdf", upsert: true });
   if (uploadError) {
@@ -101,13 +100,14 @@ export async function generateShortlist({
     .eq("id", shortlist.id);
 
   // URL signée courte durée pour le téléchargement immédiat
-  const { data: signed } = await admin.storage
+  const { data: signed } = await supabase.storage
     .from("shortlists")
     .createSignedUrl(path, 60 * 60);
   if (!signed) throw new Error("Génération du lien de téléchargement impossible.");
 
   for (const id of candidateIds) {
     await logAudit(
+      supabase,
       id,
       actorEmail,
       `export shortlist PDF (${language.toUpperCase()}) pour le mandat "${(mandate as Mandate).title}"`

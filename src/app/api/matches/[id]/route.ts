@@ -53,6 +53,7 @@ export async function PATCH(
   }
 
   await logAudit(
+    supabase,
     match.candidate_id,
     session.email,
     match.recruiter_validated
