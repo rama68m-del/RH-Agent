@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
 import {
   createCandidateFromIntake,
   IntakeSchema,
@@ -34,7 +35,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const result = await createCandidateFromIntake({
+    const supabase = await createClient();
+    const result = await createCandidateFromIntake(supabase, {
       agency_id: parsed.data.agency_id,
       full_name: parsed.data.full_name,
       phone: parsed.data.phone,

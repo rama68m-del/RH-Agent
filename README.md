@@ -25,6 +25,7 @@ Dans le SQL Editor de Supabase, exécuter dans l'ordre :
 
 1. `supabase/migrations/0001_schema.sql` — tables, RLS, buckets Storage
 2. `supabase/migrations/0002_seed_demo.sql` — agence de démonstration
+3. `supabase/migrations/0003_rls_intake_sans_service_role.sql` — politiques RLS de l'intake public (l'app fonctionne sans clé service_role)
 
 ### 3. Créer le premier recruteur
 
@@ -40,7 +41,9 @@ values ('<uuid_utilisateur>', '00000000-0000-0000-0000-000000000001', 'Prénom N
 
 ```bash
 cp .env.example .env.local
-# puis remplir les clés Supabase et Anthropic
+# puis remplir l'URL + clé anon Supabase et la clé Anthropic.
+# Aucune clé service_role n'est nécessaire : le parcours public
+# repose sur des politiques RLS dédiées (insertion seule + consentement).
 ```
 
 ### 5. Lancer

@@ -1,6 +1,6 @@
 import "server-only";
+import { randomUUID } from "crypto";
 import { z } from "zod";
-import { createAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/services/audit";
 import type { Candidate } from "@/types/database";
 import type { SearchFilters } from "@/services/ai/schemas";
@@ -46,9 +46,12 @@ export interface IntakeResult {
   duplicateWarning: boolean;
 }
 
-// M1 — Crée un candidat depuis le formulaire public d'intake :
-// consentement enregistré AVANT stockage, CV en Storage, ligne candidates.
+// M1 — Crée un candidat depuis le formulaire public d'intake.
+// `supabase` est le client anonyme côté serveur : les politiques RLS
+// n'autorisent que l'insertion (consentement APDP obligatoire), jamais
+// la lecture du vivier. Aucune clé service_role nécessaire.
 export async function createCandidateFromIntake(
+  supabase: SupabaseClient,
   input: IntakeInput
 ): Promise<IntakeResult> {
   if (!ALLOWED_CV_TYPES.has(input.file.type)) {
@@ -60,31 +63,34 @@ export async function createCandidateFromIntake(
     throw new Error("Fichier trop volumineux (10 Mo maximum).");
   }
 
-  const admin = createAdminClient();
-
   // Vérifie que l'agence existe (le formulaire est public)
-  const { data: agency } = await admin
+  const { data: agency } = await supabase
     .from("agencies")
     .select("id")
     .eq("id", input.agency_id)
-    .single();
+    .maybeSingle();
   if (!agency) throw new Error("Agence inconnue.");
 
-  // Déduplication : même téléphone ou email déjà dans le vivier de l'agence
-  let duplicateQuery = admin
-    .from("candidates")
-    .select("id", { count: "exact", head: true })
-    .eq("agency_id", input.agency_id)
-    .eq("phone", input.phone);
-  const { count: phoneCount } = await duplicateQuery;
-  const duplicateWarning = (phoneCount ?? 0) > 0;
+  // Déduplication via fonction dédiée (l'anon ne peut pas lire le vivier)
+  const { data: phoneExists } = await supabase.rpc("intake_phone_exists", {
+    p_agency_id: input.agency_id,
+    p_phone: input.phone,
+  });
+  const duplicateWarning = phoneExists === true;
 
   const now = new Date();
   const retention = new Date(now);
   retention.setMonth(retention.getMonth() + RETENTION_MONTHS);
 
-  // 1. Ligne candidate (consentement enregistré en premier)
-  const { data: candidate, error: insertError } = await admin
+  // Chemin du CV connu avant insertion : {agency_id}/{uuid}.{ext}
+  const ext =
+    input.file.type === "application/pdf"
+      ? "pdf"
+      : input.file.type.split("/")[1];
+  const path = `${input.agency_id}/${randomUUID()}.${ext}`;
+
+  // 1. Ligne candidate — le consentement est enregistré AVANT le stockage du CV
+  const { data: candidate, error: insertError } = await supabase
     .from("candidates")
     .insert({
       agency_id: input.agency_id,
@@ -97,6 +103,7 @@ export async function createCandidateFromIntake(
       consent_at: now.toISOString(),
       consent_text: input.consent_text,
       retention_until: retention.toISOString().slice(0, 10),
+      cv_file_url: path,
     })
     .select("id")
     .single();
@@ -104,30 +111,18 @@ export async function createCandidateFromIntake(
     throw new Error("Enregistrement impossible. Réessayez dans un instant.");
   }
 
-  // 2. CV en Storage : {agency_id}/{candidate_id}.{ext}
-  const ext =
-    input.file.type === "application/pdf"
-      ? "pdf"
-      : input.file.type.split("/")[1];
-  const path = `${input.agency_id}/${candidate.id}.${ext}`;
-  const { error: uploadError } = await admin.storage
+  // 2. Dépôt du CV en Storage privé
+  const { error: uploadError } = await supabase.storage
     .from("cvs")
-    .upload(path, input.file.bytes, {
-      contentType: input.file.type,
-      upsert: true,
-    });
+    .upload(path, input.file.bytes, { contentType: input.file.type });
   if (uploadError) {
-    // Nettoie la ligne pour ne pas garder un candidat sans CV
-    await admin.from("candidates").delete().eq("id", candidate.id);
-    throw new Error("Le téléversement du CV a échoué. Réessayez.");
+    throw new Error(
+      "Votre dossier est enregistré mais le CV n'a pas pu être téléversé. Renvoyez le formulaire avec votre CV."
+    );
   }
 
-  await admin
-    .from("candidates")
-    .update({ cv_file_url: path })
-    .eq("id", candidate.id);
-
   await logAudit(
+    supabase,
     candidate.id,
     "candidat (formulaire web)",
     `dépôt de candidature avec consentement (rétention jusqu'au ${retention.toISOString().slice(0, 10)})`
@@ -164,26 +159,23 @@ export async function searchCandidates(
   if (error) throw new Error(`Recherche impossible : ${error.message}`);
   let results = (data ?? []) as Candidate[];
 
-  // Repêchage par mots-clés sur nom/compétences si des keywords sont fournis
-  if (filters.keywords && filters.keywords.length > 0) {
+  // Repêchage par mots-clés si les filtres structurés n'ont rien donné
+  if (results.length === 0 && filters.keywords && filters.keywords.length > 0) {
     const kw = filters.keywords.map((k) => k.toLowerCase());
-    const matchesKw = (c: Candidate) =>
+    const { data: all } = await supabase
+      .from("candidates")
+      .select("*")
+      .neq("status", "archive")
+      .neq("status", "a_purger")
+      .limit(500);
+    results = ((all ?? []) as Candidate[]).filter((c) =>
       kw.some(
         (k) =>
           c.full_name.toLowerCase().includes(k) ||
           c.skills.some((s) => s.toLowerCase().includes(k)) ||
           (c.location ?? "").toLowerCase().includes(k)
-      );
-    // Si les filtres structurés n'ont rien donné, retenter sur mots-clés seuls
-    if (results.length === 0) {
-      const { data: all } = await supabase
-        .from("candidates")
-        .select("*")
-        .neq("status", "archive")
-        .neq("status", "a_purger")
-        .limit(500);
-      results = ((all ?? []) as Candidate[]).filter(matchesKw);
-    }
+      )
+    );
   }
 
   return dedupeCandidates(results);

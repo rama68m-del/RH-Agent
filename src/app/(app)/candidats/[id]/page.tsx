@@ -1,6 +1,5 @@
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
 import { getSessionContext } from "@/lib/auth";
 import { logAudit } from "@/services/audit";
 import { CandidateReview } from "@/components/CandidateReview";
@@ -27,13 +26,17 @@ export default async function CandidatePage({
   if (!data) notFound();
   const candidate = data as Candidate;
 
-  await logAudit(id, session?.email ?? "recruteur", "consultation de la fiche candidat");
+  await logAudit(
+    supabase,
+    id,
+    session?.email ?? "recruteur",
+    "consultation de la fiche candidat"
+  );
 
-  // URL signée du CV pour consultation (1 h)
+  // URL signée du CV pour consultation (1 h) — session recruteur + RLS Storage
   let cvUrl: string | null = null;
   if (candidate.cv_file_url) {
-    const admin = createAdminClient();
-    const { data: signed } = await admin.storage
+    const { data: signed } = await supabase.storage
       .from("cvs")
       .createSignedUrl(candidate.cv_file_url, 60 * 60);
     cvUrl = signed?.signedUrl ?? null;

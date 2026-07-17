@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
 import { getSessionContext } from "@/lib/auth";
 import { parseCv } from "@/services/ai/parsing";
 import { logAudit } from "@/services/audit";
@@ -43,8 +42,8 @@ export async function POST(
   }
 
   try {
-    const admin = createAdminClient();
-    const { data: blob, error: dlError } = await admin.storage
+    // Le recruteur télécharge le CV via sa session (politique RLS Storage)
+    const { data: blob, error: dlError } = await supabase.storage
       .from("cvs")
       .download(candidate.cv_file_url);
     if (dlError || !blob) {
@@ -60,7 +59,12 @@ export async function POST(
 
     const profile = await parseCv(base64, mimeType);
 
-    await logAudit(id, session.email, "parsing IA du CV (proposition de profil)");
+    await logAudit(
+      supabase,
+      id,
+      session.email,
+      "parsing IA du CV (proposition de profil)"
+    );
 
     return NextResponse.json({ ok: true, profile });
   } catch (err) {
